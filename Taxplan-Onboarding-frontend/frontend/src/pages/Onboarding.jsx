@@ -1,13 +1,18 @@
-import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useState, useRef } from 'react';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { completeOnboarding } from '../services/api';
+import { completeOnboarding, uploadOnboardingDocument } from '../services/api';
 
 const Onboarding = () => {
     const navigate = useNavigate();
+    const location = useLocation();
     const { user, updateUser } = useAuth();
     const [loading, setLoading] = useState(false);
     const [errors, setErrors] = useState({});
+    const [experienceLetter, setExperienceLetter] = useState(null);
+    const experienceLetterRef = useRef(null);
+    const isDetailsEdit = location.pathname === '/onboarding/details';
+    const identityMismatchNotice = location.state?.identityMismatchMessage || '';
 
     const [formData, setFormData] = useState({
         first_name: user?.first_name || '',
@@ -63,7 +68,25 @@ const Onboarding = () => {
         if (!formData.city?.trim()) e.city = 'City required';
         if (!formData.state?.trim()) e.state = 'State required';
         if (!formData.pincode?.trim() || formData.pincode.trim().length < 6) e.pincode = 'Valid pincode required (6 digits)';
+        if (!formData.years_of_experience || Number(formData.years_of_experience) < 1) e.years_of_experience = 'Years of experience is required';
+        if (!isDetailsEdit && !experienceLetter) e.experience_letter = 'Experience letter is required';
         return e;
+    };
+
+    const handleExperienceLetter = (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        const allowed = ['application/pdf', 'image/jpeg', 'image/jpg', 'image/png'];
+        if (!allowed.includes(file.type)) {
+            setErrors(prev => ({ ...prev, experience_letter: 'Only PDF, JPG, JPEG, PNG are allowed' }));
+            return;
+        }
+        if (file.size > 10 * 1024 * 1024) {
+            setErrors(prev => ({ ...prev, experience_letter: 'File must be under 10MB' }));
+            return;
+        }
+        setExperienceLetter(file);
+        setErrors(prev => ({ ...prev, experience_letter: null }));
     };
 
     const handleSubmit = async (e) => {
@@ -73,8 +96,19 @@ const Onboarding = () => {
         setLoading(true);
         try {
             const data = await completeOnboarding(formData);
+            if (!isDetailsEdit) {
+                const letterData = new FormData();
+                letterData.append('document_type', 'experience_letter');
+                letterData.append('title', 'Experience Letter');
+                letterData.append('file', experienceLetter);
+                try {
+                    await uploadOnboardingDocument(letterData);
+                } catch (uploadErr) {
+                    console.error('Experience letter upload/verification failed (non-blocking):', uploadErr);
+                }
+            }
             updateUser(data.user);
-            navigate('/success');
+            navigate(isDetailsEdit ? '/onboarding/identity' : '/success');
         } catch (err) {
             console.error('Onboarding failed:', err);
             if (err.response?.data) {
@@ -127,6 +161,12 @@ const Onboarding = () => {
                     <h1 style={{ fontSize: 24, fontWeight: 700, color: '#111827', margin: 0 }}>Complete Your Profile</h1>
                     <p style={{ fontSize: 14, color: '#6b7280', marginTop: 4 }}>Fill in your details accurately. This information is used for verification.</p>
                 </div>
+
+                {identityMismatchNotice && (
+                    <div style={{ marginBottom: 16, background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 10, padding: '12px 14px', fontSize: 13, color: '#92400e' }}>
+                        {identityMismatchNotice}
+                    </div>
+                )}
 
                 <form onSubmit={handleSubmit}>
                     {/* Personal Information */}
@@ -215,9 +255,37 @@ const Onboarding = () => {
                             </div>
                             <div>
                                 <label style={labelStyle}>Years of Experience</label>
-                                <input name="years_of_experience" value={formData.years_of_experience} onChange={handleChange} type="number" placeholder="e.g. 5" style={inputStyle(false)} />
+                                <input name="years_of_experience" value={formData.years_of_experience} onChange={handleChange} type="number" min="1" placeholder="e.g. 5" style={inputStyle(errors.years_of_experience)} />
+                                {errors.years_of_experience && <p style={errorStyle}>{errors.years_of_experience}</p>}
                             </div>
                         </div>
+                        {!isDetailsEdit && (
+                            <div style={{ marginTop: 16 }}>
+                                <label style={labelStyle}>Experience Letter <span style={{ color: '#ef4444' }}>*</span></label>
+                                <div
+                                    onClick={() => experienceLetterRef.current?.click()}
+                                    style={{
+                                        border: errors.experience_letter ? '1px solid #fca5a5' : '1px dashed #d1d5db',
+                                        background: errors.experience_letter ? '#fef2f2' : '#fff',
+                                        borderRadius: 8,
+                                        padding: '12px 14px',
+                                        cursor: 'pointer',
+                                        fontSize: 13,
+                                        color: experienceLetter ? '#047857' : '#6b7280',
+                                    }}
+                                >
+                                    {experienceLetter ? experienceLetter.name : 'Upload experience letter (PDF/JPG/PNG, max 10MB)'}
+                                </div>
+                                <input
+                                    ref={experienceLetterRef}
+                                    type="file"
+                                    accept=".pdf,.jpg,.jpeg,.png"
+                                    onChange={handleExperienceLetter}
+                                    style={{ display: 'none' }}
+                                />
+                                {errors.experience_letter && <p style={errorStyle}>{errors.experience_letter}</p>}
+                            </div>
+                        )}
                     </div>
 
                     <div style={{ display: 'flex', justifyContent: 'flex-end' }}>

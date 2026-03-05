@@ -14,6 +14,7 @@ const ConsultantDetail = () => {
     });
     const [selectedImage, setSelectedImage] = useState(null);
     const [selectedVideoCard, setSelectedVideoCard] = useState(null);
+    const [timelineFilters, setTimelineFilters] = useState({});
 
     const token = localStorage.getItem('admin_token');
 
@@ -62,6 +63,76 @@ const ConsultantDetail = () => {
     };
 
     const toggle = (key) => setOpenSections(prev => ({ ...prev, [key]: !prev[key] }));
+    const formatRuleName = (name) => String(name || '').replaceAll('_', ' ');
+    const defaultTimelineFilter = { status: 'all', rule: 'all', query: '' };
+    const getTimelineFilter = (sessionId) => timelineFilters[sessionId] || defaultTimelineFilter;
+    const updateTimelineFilter = (sessionId, patch) => {
+        setTimelineFilters(prev => ({
+            ...prev,
+            [sessionId]: { ...(prev[sessionId] || defaultTimelineFilter), ...patch },
+        }));
+    };
+    const getEventSignals = (event) => {
+        const signals = [];
+        if (event.face_count !== 1) signals.push(`faces:${event.face_count}`);
+        if (event.audio_detected) signals.push('audio');
+        if (event.gaze_violation) signals.push('gaze');
+        if (event.pose_yaw != null || event.pose_pitch != null || event.pose_roll != null) {
+            signals.push(`pose(${event.pose_yaw ?? '-'}, ${event.pose_pitch ?? '-'}, ${event.pose_roll ?? '-'})`);
+        }
+        if (Array.isArray(event.active_rules) && event.active_rules.length > 0) {
+            signals.push(`rules:${event.active_rules.map(formatRuleName).join(', ')}`);
+        }
+        return signals;
+    };
+    const computeTimelineMetrics = (timeline = []) => {
+        const total = timeline.length;
+        const violations = timeline.filter((e) => e.status === 'violation').length;
+        const ok = total - violations;
+        const byRule = {};
+        timeline.forEach((e) => {
+            (e.active_rules || []).forEach((rule) => {
+                byRule[rule] = (byRule[rule] || 0) + 1;
+            });
+        });
+        const topRules = Object.entries(byRule)
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 3);
+        return { total, violations, ok, topRules };
+    };
+    const toCsvCell = (value) => {
+        const str = String(value ?? '');
+        return `"${str.replaceAll('"', '""')}"`;
+    };
+    const exportTimelineCsv = (sessionId, rows) => {
+        const header = ['timestamp', 'status', 'reason', 'signals', 'active_rules', 'face_count', 'audio_detected', 'gaze_violation', 'pose_yaw', 'pose_pitch', 'pose_roll'];
+        const lines = [header.join(',')];
+        rows.forEach((event) => {
+            const signals = getEventSignals(event).join(' | ');
+            lines.push([
+                toCsvCell(event.timestamp ? new Date(event.timestamp).toISOString() : ''),
+                toCsvCell(event.status || ''),
+                toCsvCell(event.reason || ''),
+                toCsvCell(signals),
+                toCsvCell((event.active_rules || []).map(formatRuleName).join(' | ')),
+                toCsvCell(event.face_count ?? ''),
+                toCsvCell(event.audio_detected ?? ''),
+                toCsvCell(event.gaze_violation ?? ''),
+                toCsvCell(event.pose_yaw ?? ''),
+                toCsvCell(event.pose_pitch ?? ''),
+                toCsvCell(event.pose_roll ?? ''),
+            ].join(','));
+        });
+        const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `proctoring_timeline_session_${sessionId}.csv`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    };
 
     // Styles
     const sectionStyle = {
@@ -495,6 +566,34 @@ const ConsultantDetail = () => {
                                         </div>
                                     </div>
 
+                                    {s.proctoring_ai && (
+                                        <div style={{ marginBottom: 14 }}>
+                                            <div style={{ fontSize: 12, fontWeight: 700, color: '#f59e0b', marginBottom: 8 }}>Proctoring AI Summary</div>
+                                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10 }}>
+                                                <div style={{ padding: 10, borderRadius: 8, background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.25)' }}>
+                                                    <div style={{ fontSize: 10, color: '#fcd34d' }}>Risk Score</div>
+                                                    <div style={{ fontSize: 17, fontWeight: 800, color: '#fde68a' }}>{s.proctoring_ai.risk_score ?? 0}/100</div>
+                                                </div>
+                                                <div style={{ padding: 10, borderRadius: 8, background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.25)' }}>
+                                                    <div style={{ fontSize: 10, color: '#93c5fd' }}>Escalation</div>
+                                                    <div style={{ fontSize: 12, fontWeight: 800, color: '#dbeafe', textTransform: 'capitalize' }}>
+                                                        {String(s.proctoring_ai.escalation_policy || 'clear').replace('_', ' ')}
+                                                    </div>
+                                                </div>
+                                                <div style={{ padding: 10, borderRadius: 8, background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.25)' }}>
+                                                    <div style={{ fontSize: 10, color: '#fca5a5' }}>Violation Snapshots</div>
+                                                    <div style={{ fontSize: 17, fontWeight: 800, color: '#fecaca' }}>
+                                                        {s.proctoring_ai.signals?.violation_snapshots ?? 0}/{s.proctoring_ai.signals?.total_snapshots ?? 0}
+                                                    </div>
+                                                </div>
+                                                <div style={{ padding: 10, borderRadius: 8, background: 'rgba(16,185,129,0.1)', border: '1px solid rgba(16,185,129,0.25)' }}>
+                                                    <div style={{ fontSize: 10, color: '#6ee7b7' }}>Fallback Count</div>
+                                                    <div style={{ fontSize: 17, fontWeight: 800, color: '#a7f3d0' }}>{s.proctoring_ai.signals?.server_fallback_count ?? 0}</div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )}
+
                                     <div style={{ fontSize: 12, color: '#64748b', display: 'flex', gap: 20, flexWrap: 'wrap', marginBottom: 12 }}>
                                         <span>Started: <span style={{ color: '#94a3b8' }}>{s.start_time ? new Date(s.start_time).toLocaleString() : '—'}</span></span>
                                         <span>Ended: <span style={{ color: '#94a3b8' }}>{s.end_time ? new Date(s.end_time).toLocaleString() : '—'}</span></span>
@@ -563,6 +662,139 @@ const ConsultantDetail = () => {
                                                 ))}
                                             </div>
                                         </div>
+                                    )}
+
+                                    {/* Proctoring Timeline */}
+                                    {s.proctoring_timeline?.length > 0 && (
+                                        (() => {
+                                            const filter = getTimelineFilter(s.id);
+                                            const metrics = computeTimelineMetrics(s.proctoring_timeline);
+                                            const filteredTimeline = s.proctoring_timeline.filter((event) => {
+                                                if (filter.status !== 'all' && event.status !== filter.status) return false;
+                                                if (filter.rule !== 'all' && !(event.active_rules || []).includes(filter.rule)) return false;
+                                                if (filter.query) {
+                                                    const query = filter.query.toLowerCase();
+                                                    const hay = `${event.reason || ''} ${getEventSignals(event).join(' ')} ${(event.active_rules || []).join(' ')}`.toLowerCase();
+                                                    if (!hay.includes(query)) return false;
+                                                }
+                                                return true;
+                                            });
+                                            const uniqueRules = Array.from(new Set(s.proctoring_timeline.flatMap((e) => e.active_rules || [])));
+                                            return (
+                                                <div style={{ marginBottom: 20 }}>
+                                                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 8, flexWrap: 'wrap' }}>
+                                                        <div style={{ fontSize: 12, fontWeight: 700, color: '#60a5fa' }}>
+                                                            Proctoring Timeline
+                                                        </div>
+                                                        <button
+                                                            onClick={() => exportTimelineCsv(s.id, filteredTimeline)}
+                                                            style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid rgba(96,165,250,0.35)', background: 'rgba(96,165,250,0.12)', color: '#bfdbfe', fontSize: 11, fontWeight: 700, cursor: 'pointer' }}
+                                                        >
+                                                            Export CSV
+                                                        </button>
+                                                    </div>
+
+                                                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 8, marginBottom: 10 }}>
+                                                        <div style={{ padding: 10, borderRadius: 8, background: 'rgba(30,41,59,0.55)', border: '1px solid rgba(148,163,184,0.12)' }}>
+                                                            <div style={{ fontSize: 10, color: '#64748b' }}>Total Events</div>
+                                                            <div style={{ fontSize: 16, fontWeight: 800, color: '#e2e8f0' }}>{metrics.total}</div>
+                                                        </div>
+                                                        <div style={{ padding: 10, borderRadius: 8, background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.25)' }}>
+                                                            <div style={{ fontSize: 10, color: '#fca5a5' }}>Violations</div>
+                                                            <div style={{ fontSize: 16, fontWeight: 800, color: '#fca5a5' }}>{metrics.violations}</div>
+                                                        </div>
+                                                        <div style={{ padding: 10, borderRadius: 8, background: 'rgba(16,185,129,0.1)', border: '1px solid rgba(16,185,129,0.25)' }}>
+                                                            <div style={{ fontSize: 10, color: '#6ee7b7' }}>OK Events</div>
+                                                            <div style={{ fontSize: 16, fontWeight: 800, color: '#6ee7b7' }}>{metrics.ok}</div>
+                                                        </div>
+                                                        <div style={{ padding: 10, borderRadius: 8, background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.25)' }}>
+                                                            <div style={{ fontSize: 10, color: '#93c5fd' }}>Top Rules</div>
+                                                            <div style={{ fontSize: 11, fontWeight: 700, color: '#bfdbfe', lineHeight: 1.3 }}>
+                                                                {metrics.topRules.length > 0 ? metrics.topRules.map(([rule, count]) => `${formatRuleName(rule)} (${count})`).join(', ') : 'None'}
+                                                            </div>
+                                                        </div>
+                                                    </div>
+
+                                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 160px 180px', gap: 8, marginBottom: 10 }}>
+                                                        <input
+                                                            value={filter.query}
+                                                            onChange={(e) => updateTimelineFilter(s.id, { query: e.target.value })}
+                                                            placeholder="Search reason/signals/rules..."
+                                                            style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid rgba(148,163,184,0.25)', background: 'rgba(15,23,42,0.55)', color: '#e2e8f0', fontSize: 12, outline: 'none' }}
+                                                        />
+                                                        <select
+                                                            value={filter.status}
+                                                            onChange={(e) => updateTimelineFilter(s.id, { status: e.target.value })}
+                                                            style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid rgba(148,163,184,0.25)', background: 'rgba(15,23,42,0.55)', color: '#e2e8f0', fontSize: 12, outline: 'none' }}
+                                                        >
+                                                            <option value="all">All Status</option>
+                                                            <option value="violation">Violation</option>
+                                                            <option value="ok">OK</option>
+                                                        </select>
+                                                        <select
+                                                            value={filter.rule}
+                                                            onChange={(e) => updateTimelineFilter(s.id, { rule: e.target.value })}
+                                                            style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid rgba(148,163,184,0.25)', background: 'rgba(15,23,42,0.55)', color: '#e2e8f0', fontSize: 12, outline: 'none' }}
+                                                        >
+                                                            <option value="all">All Rules</option>
+                                                            {uniqueRules.map((rule) => (
+                                                                <option key={rule} value={rule}>{formatRuleName(rule)}</option>
+                                                            ))}
+                                                        </select>
+                                                    </div>
+
+                                                    <div style={{ borderRadius: 8, overflow: 'hidden', border: '1px solid rgba(96,165,250,0.15)' }}>
+                                                        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                                                            <thead>
+                                                                <tr style={{ background: 'rgba(96,165,250,0.08)' }}>
+                                                                    <th style={{ padding: '8px 12px', fontSize: 11, color: '#64748b', textAlign: 'left', fontWeight: 600 }}>Time</th>
+                                                                    <th style={{ padding: '8px 12px', fontSize: 11, color: '#64748b', textAlign: 'left', fontWeight: 600 }}>Status</th>
+                                                                    <th style={{ padding: '8px 12px', fontSize: 11, color: '#64748b', textAlign: 'left', fontWeight: 600 }}>Reason</th>
+                                                                    <th style={{ padding: '8px 12px', fontSize: 11, color: '#64748b', textAlign: 'left', fontWeight: 600 }}>Signals</th>
+                                                                </tr>
+                                                            </thead>
+                                                            <tbody>
+                                                                {filteredTimeline.map((event, ei) => {
+                                                                    const signals = getEventSignals(event);
+                                                                    return (
+                                                                        <tr key={`${event.snapshot_id}-${ei}`} style={{ borderTop: '1px solid rgba(148,163,184,0.05)' }}>
+                                                                            <td style={{ padding: '8px 12px', fontSize: 12, color: '#94a3b8', whiteSpace: 'nowrap' }}>
+                                                                                {event.timestamp ? new Date(event.timestamp).toLocaleString() : '—'}
+                                                                            </td>
+                                                                            <td style={{ padding: '8px 12px', fontSize: 12 }}>
+                                                                                <span style={{
+                                                                                    padding: '2px 8px',
+                                                                                    borderRadius: 999,
+                                                                                    fontWeight: 700,
+                                                                                    fontSize: 10,
+                                                                                    background: event.status === 'violation' ? 'rgba(239,68,68,0.14)' : 'rgba(16,185,129,0.14)',
+                                                                                    color: event.status === 'violation' ? '#fca5a5' : '#6ee7b7',
+                                                                                }}>
+                                                                                    {event.status}
+                                                                                </span>
+                                                                            </td>
+                                                                            <td style={{ padding: '8px 12px', fontSize: 12, color: event.reason ? '#fca5a5' : '#94a3b8' }}>
+                                                                                {event.reason || '—'}
+                                                                            </td>
+                                                                            <td style={{ padding: '8px 12px', fontSize: 12, color: '#cbd5e1' }}>
+                                                                                {signals.length > 0 ? signals.join(' | ') : '—'}
+                                                                            </td>
+                                                                        </tr>
+                                                                    );
+                                                                })}
+                                                                {filteredTimeline.length === 0 && (
+                                                                    <tr style={{ borderTop: '1px solid rgba(148,163,184,0.05)' }}>
+                                                                        <td colSpan={4} style={{ padding: '10px 12px', fontSize: 12, color: '#64748b' }}>
+                                                                            No timeline events match current filters.
+                                                                        </td>
+                                                                    </tr>
+                                                                )}
+                                                            </tbody>
+                                                        </table>
+                                                    </div>
+                                                </div>
+                                            );
+                                        })()
                                     )}
 
                                     {/* Video Responses — List all questions */}
@@ -907,7 +1139,7 @@ const ConsultantDetail = () => {
                         <div style={{ position: 'relative', maxWidth: '100%', maxHeight: '100%' }}>
                             <button onClick={() => setSelectedImage(null)} style={{
                                 position: 'absolute', top: -50, right: 0,
-                                background: 'none', border: 'none', color: '#fff', fontSize: 24, cursor: 'pointer',
+                                border: 'none', color: '#fff', fontSize: 24, cursor: 'pointer',
                                 display: 'flex', alignItems: 'center', gap: 8, padding: '8px 16px', background: 'rgba(0,0,0,0.5)', borderRadius: 20
                             }}>
                                 ✕ Close

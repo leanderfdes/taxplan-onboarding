@@ -1,7 +1,13 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { acceptDeclaration } from '../services/api';
+import { acceptDeclaration, getProctoringPolicy } from '../services/api';
+
+const DEFAULT_PROCTORING_DECLARATION_POLICY = {
+    TAB_WARNINGS_LIMIT: 3,
+    WEBCAM_WARNINGS_LIMIT: 3,
+    FULLSCREEN_EXITS_LIMIT: 3,
+};
 
 const Declaration = () => {
     const navigate = useNavigate();
@@ -15,6 +21,7 @@ const Declaration = () => {
     });
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState(null);
+    const [policy, setPolicy] = useState(DEFAULT_PROCTORING_DECLARATION_POLICY);
 
     const allAgreed = Object.values(agreements).every(v => v === true);
     const anyDisagreed = Object.values(agreements).some(v => v === false);
@@ -22,6 +29,26 @@ const Declaration = () => {
     const handleRadioChange = (key, value) => {
         setAgreements(prev => ({ ...prev, [key]: value }));
     };
+
+    useEffect(() => {
+        let mounted = true;
+        const loadPolicy = async () => {
+            try {
+                const policyRes = await getProctoringPolicy();
+                const thresholds = policyRes?.thresholds || {};
+                if (!mounted) return;
+                setPolicy({
+                    TAB_WARNINGS_LIMIT: thresholds.max_tab_warnings ?? DEFAULT_PROCTORING_DECLARATION_POLICY.TAB_WARNINGS_LIMIT,
+                    WEBCAM_WARNINGS_LIMIT: thresholds.max_webcam_warnings ?? DEFAULT_PROCTORING_DECLARATION_POLICY.WEBCAM_WARNINGS_LIMIT,
+                    FULLSCREEN_EXITS_LIMIT: thresholds.max_fullscreen_exits ?? DEFAULT_PROCTORING_DECLARATION_POLICY.FULLSCREEN_EXITS_LIMIT,
+                });
+            } catch (err) {
+                console.error('Failed to load proctoring policy:', err);
+            }
+        };
+        loadPolicy();
+        return () => { mounted = false; };
+    }, []);
 
     const handleSubmit = async () => {
         if (!allAgreed) return;
@@ -70,6 +97,17 @@ const Declaration = () => {
                     <h1 style={{ fontSize: 24, fontWeight: 700, color: '#111827', margin: 0 }}>Consultant Declaration</h1>
                     <p style={{ fontSize: 14, color: '#6b7280', marginTop: 6 }}>Please read and carefully agree to all terms before proceeding to the assessment platform.</p>
                 </div>
+
+                <div style={{ background: '#eff6ff', border: '1px solid #bfdbfe', color: '#1e3a8a', padding: '12px 16px', borderRadius: 8, marginBottom: 24, fontSize: 13, lineHeight: 1.6 }}>
+                    <strong>Proctoring policy highlights:</strong>
+                    <ul style={{ margin: '8px 0 0 18px', padding: 0 }}>
+                        <li>Tab-switch warnings allowed: {policy.TAB_WARNINGS_LIMIT}</li>
+                        <li>Webcam/proctoring warnings allowed: {policy.WEBCAM_WARNINGS_LIMIT}</li>
+                        <li>Assessment must be taken in fullscreen mode.</li>
+                        <li>Violations are logged and can lead to auto-submission or disqualification.</li>
+                    </ul>
+                </div>
+
 
                 {error && (
                     <div style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#ef4444', padding: '12px 16px', borderRadius: 8, marginBottom: 24, fontSize: 14 }}>

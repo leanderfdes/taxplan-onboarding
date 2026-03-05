@@ -1,7 +1,9 @@
 from celery import shared_task
 from .services import VideoEvaluator
 from assessment.models import VideoResponse
+from assessment.risk import compute_proctoring_risk_summary
 import logging
+from django.utils import timezone
 
 logger = logging.getLogger(__name__)
 
@@ -43,9 +45,21 @@ def evaluate_video_task(video_response_id, question_text):
             logger.info(f"All videos evaluated for session {session.id}. Checking auto-credential condition.")
             video_score = sum([vr.ai_score for vr in all_videos if vr.ai_score is not None])
             mcq_score = session.score or 0
+            proctoring_ai = compute_proctoring_risk_summary(session)
+            escalation_policy = proctoring_ai.get('escalation_policy', 'clear')
             
-            logger.info(f"Session {session.id} final scores - MCQ: {mcq_score}, Video: {video_score}")
-            if mcq_score >= 30 and video_score >= 15:
+            logger.info(
+                f"Session {session.id} final scores - MCQ: {mcq_score}, Video: {video_score}, "
+                f"ProctoringRisk: {proctoring_ai.get('risk_score')} ({escalation_policy})"
+            )
+
+            if escalation_policy == 'auto_flag' and session.status != 'flagged':
+                session.status = 'flagged'
+                session.end_time = timezone.now()
+                session.save(update_fields=['status', 'end_time'])
+                logger.warning(f"Session {session.id} auto-flagged by proctoring risk policy.")
+
+            if mcq_score >= 30 and video_score >= 15 and escalation_policy == 'clear':
                 user = session.user
                 logger.info(f"Threshold met (MCQ: {mcq_score}, Video: {video_score}). Checking auto-credential condition.")
                 
@@ -59,7 +73,10 @@ def evaluate_video_task(video_response_id, question_text):
                 except Exception as eval_err:
                     logger.error(f"Error checking auto-credentials for user {user.id}: {eval_err}")
             else:
-                logger.info(f"Threshold not met (MCQ: {mcq_score}, Video: {video_score}). Credentials will await manual generation.")
+                logger.info(
+                    f"Auto-credential deferred (MCQ: {mcq_score}, Video: {video_score}, "
+                    f"Escalation: {escalation_policy}). Awaiting manual review."
+                )
                 
     except Exception as e:
         logger.error(f"Failed to evaluate VideoResponse ID {video_response_id}: {e}")

@@ -62,6 +62,16 @@ export const getDocuments = async () => {
     return response.data;
 };
 
+// Upload onboarding document (stored under auth consultant documents)
+export const uploadOnboardingDocument = async (formData) => {
+    const response = await api.post('/auth/documents/upload/', formData, {
+        headers: {
+            'Content-Type': 'multipart/form-data',
+        },
+    });
+    return response.data;
+};
+
 
 
 
@@ -134,6 +144,11 @@ export const processProctoringSnapshot = async (sessionId, formData) => {
             'Content-Type': 'multipart/form-data',
         },
     });
+    return response.data;
+};
+
+export const getProctoringPolicy = async () => {
+    const response = await api.get('/assessment/sessions/proctoring_policy/');
     return response.data;
 };
 

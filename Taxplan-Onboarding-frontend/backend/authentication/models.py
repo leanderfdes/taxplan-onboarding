@@ -100,12 +100,15 @@ class ConsultantDocument(models.Model):
         ('bachelors_degree', "Bachelor's Degree"),
         ('masters_degree', "Master's Degree"),
         ('certificate', 'Certificate (Additional)'),
+        ('experience_letter', 'Experience Letter'),
     ]
 
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='documents')
     document_type = models.CharField(max_length=50, choices=DOCUMENT_TYPES)
     title = models.CharField(max_length=255, blank=True)
     file = models.FileField(upload_to='consultant_documents/')
+    verification_status = models.CharField(max_length=50, blank=True, null=True)
+    gemini_raw_response = models.TextField(blank=True, null=True)
     uploaded_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

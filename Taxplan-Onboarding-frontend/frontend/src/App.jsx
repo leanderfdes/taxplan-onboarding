@@ -87,6 +87,9 @@ const StepGuard = ({ step, children }) => {
     case 'onboarding':
       allowed = !onboarded;
       break;
+    case 'details-edit':
+      allowed = onboarded && !verified;
+      break;
     case 'identity':
       allowed = onboarded && !verified;
       break;
@@ -125,6 +128,9 @@ function AppRoutes() {
       <Route path="/onboarding" element={
         <ProtectedRoute><StepGuard step="onboarding"><Onboarding /></StepGuard></ProtectedRoute>
       } />
+      <Route path="/onboarding/details" element={
+        <ProtectedRoute><StepGuard step="details-edit"><Onboarding /></StepGuard></ProtectedRoute>
+      } />
       <Route path="/success" element={
         <ProtectedRoute><StepGuard step="dashboard"><Success /></StepGuard></ProtectedRoute>
       } />
@@ -157,6 +163,7 @@ function AppRoutes() {
       <Route path="/admin" element={<AdminLogin />} />
       <Route path="/admin/dashboard" element={<AdminDashboard />} />
       <Route path="/admin/consultant/:id" element={<ConsultantDetail />} />
+      <Route path="/admin/consultants/:id" element={<ConsultantDetail />} />
 
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

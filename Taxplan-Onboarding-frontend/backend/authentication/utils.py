@@ -1,7 +1,9 @@
 import random
 import string
+import time
 from django.core.mail import send_mail
 from django.conf import settings
+from django.db import transaction
 from authentication.models import ConsultantCredential
 
 def generate_and_send_credentials(user):
@@ -33,25 +35,38 @@ def generate_and_send_credentials(user):
         chars = string.ascii_letters + string.digits + "!@#$%^&*"
         password = ''.join(random.choices(chars, k=10))
 
-        ConsultantCredential.objects.create(
-            user=user,
-            username=username,
-            password=password
-        )
-
-        user.set_password(password)
-        user.save()
-
         subject = "Your TaxPlan Advisor Consultant Credentials"
         message = f"Hello {user.get_full_name()},\n\nCongratulations! Your verification is complete.\nHere are your login credentials for the consultant portal:\n\nUsername: {username}\nPassword: {password}\n\nPlease keep these credentials safe and do not share them.\n\nBest regards,\nTaxPlan Advisor Team"
-        
-        send_mail(
-            subject,
-            message,
-            settings.DEFAULT_FROM_EMAIL or 'admin@taxplanadvisor.com',
-            [user.email],
-            fail_silently=True,
-        )
+
+        max_attempts = 3
+        last_email_error = None
+        for attempt in range(1, max_attempts + 1):
+            try:
+                send_mail(
+                    subject,
+                    message,
+                    settings.DEFAULT_FROM_EMAIL or 'admin@taxplanadvisor.com',
+                    [user.email],
+                    fail_silently=False,
+                )
+                last_email_error = None
+                break
+            except Exception as email_err:
+                last_email_error = email_err
+                if attempt < max_attempts:
+                    time.sleep(1.5 * attempt)
+
+        if last_email_error is not None:
+            return False, f"Failed to send credential email after {max_attempts} attempts: {last_email_error}"
+
+        with transaction.atomic():
+            ConsultantCredential.objects.create(
+                user=user,
+                username=username,
+                password=password
+            )
+            user.set_password(password)
+            user.save(update_fields=['password'])
 
         return True, {"username": username, "password": password, "message": "Credentials generated and sent successfully"}
 

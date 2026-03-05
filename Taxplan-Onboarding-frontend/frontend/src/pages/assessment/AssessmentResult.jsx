@@ -57,7 +57,7 @@ const AssessmentResult = () => {
     const passed = result?.passed;
     const isDisqualified = result?.status === 'flagged' || result?.hide_marks;
     const score = result?.score || 0;
-    const total = result?.total_questions || 50;
+    const total = result?.total || result?.total_questions || 50;
     const percentage = total > 0 ? Math.round((score / total) * 100) : 0;
 
     return (
@@ -71,8 +71,8 @@ const AssessmentResult = () => {
                 </div>
             </header>
 
-            <div style={{ maxWidth: 500, margin: '0 auto', padding: '48px 32px 60px' }}>
-                <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e5e7eb', padding: 40, textAlign: 'center' }}>
+            <div style={{ minHeight: 'calc(100vh - 56px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px 32px 40px' }}>
+                <div style={{ width: '100%', maxWidth: 500, background: '#fff', borderRadius: 12, border: '1px solid #e5e7eb', padding: 40, textAlign: 'center' }}>
                     {/* Status */}
                     <div style={{
                         width: 64, height: 64, borderRadius: '50%', margin: '0 auto 20px',
@@ -89,7 +89,7 @@ const AssessmentResult = () => {
                                 Assessment Terminated
                             </h1>
                             <p style={{ fontSize: 14, color: '#6b7280', marginBottom: 32 }}>
-                                You have been disqualified due to exceeding the maximum number of proctoring violations.
+                                Your assessment was ended due to policy violations.
                             </p>
                         </>
                     ) : (

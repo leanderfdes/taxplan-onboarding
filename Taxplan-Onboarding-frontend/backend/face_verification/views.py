@@ -13,6 +13,9 @@ from utils.rekognition_client import get_rekognition_client
 
 # Initialize Rekognition client
 rekognition = get_rekognition_client()
+# A slightly relaxed threshold improves real-world matching for
+# glasses, minor aging changes, and hairstyle/facial-hair differences.
+FACE_MATCH_THRESHOLD = 70.0
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
@@ -122,7 +125,9 @@ def verify_face(request, user_id):
         response = rekognition.compare_faces(
             SourceImage={"Bytes": id_photo_data},
             TargetImage={"Bytes": live_photo_bytes},
-            SimilarityThreshold=85
+            # Use a low threshold so we can return the actual similarity score
+            # and apply the policy threshold in application logic.
+            SimilarityThreshold=0
         )
 
         matches = response.get("FaceMatches", [])
@@ -130,10 +135,9 @@ def verify_face(request, user_id):
         confidence = 0.0
 
         if matches:
-            
             similarity = matches[0]["Similarity"]
-            is_match = True
             confidence = similarity
+            is_match = similarity >= FACE_MATCH_THRESHOLD
         
         
         verification.is_match = is_match

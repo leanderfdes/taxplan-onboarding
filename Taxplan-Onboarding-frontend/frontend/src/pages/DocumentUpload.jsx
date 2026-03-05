@@ -73,7 +73,12 @@ const DocumentUpload = () => {
             }
             navigate('/onboarding/complete');
         } catch (err) {
-            setError('Upload failed. Please try again.');
+            const backendError = err?.response?.data?.error;
+            if (backendError) {
+                setError(backendError);
+            } else {
+                setError('Upload failed. Please try again.');
+            }
             console.error(err);
         } finally {
             setUploading(false);

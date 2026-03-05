@@ -17,7 +17,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = os.getenv('SECRET_KEY', 'django-insecure-taxplan-advisor-secret-key')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = os.getenv('DEBUG', 'True') == 'True'
+DEBUG = os.getenv('DEBUG', 'False') == 'True'
 
 ALLOWED_HOSTS = ['localhost', '127.0.0.1']
 
@@ -120,6 +120,8 @@ REST_FRAMEWORK = {
 CORS_ALLOWED_ORIGINS = [
     'http://localhost:5173',
     'http://127.0.0.1:5173',
+    'http://localhost:5174',
+    'http://127.0.0.1:5174',
     'http://localhost:3000',
 ]
 CORS_ALLOW_CREDENTIALS = True
@@ -169,3 +171,24 @@ CELERY_ACCEPT_CONTENT = ['application/json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = 'UTC'
+
+# Investment planner services
+REDIS_URL = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
+CACHES = {
+    'default': {
+        'BACKEND': 'django_redis.cache.RedisCache',
+        'LOCATION': REDIS_URL,
+        'OPTIONS': {
+            'CLIENT_CLASS': 'django_redis.client.DefaultClient',
+            'CONNECTION_POOL_KWARGS': {'max_connections': 50},
+            'SOCKET_CONNECT_TIMEOUT': 5,
+            'SOCKET_TIMEOUT': 5,
+        },
+        'KEY_PREFIX': 'taxplan',
+        'TIMEOUT': 60 * 60 * 4,
+    }
+}
+
+GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '')
+GOLDAPI_KEY = os.getenv('GOLDAPI_KEY', '')
+NEWSAPI_KEY = os.getenv('NEWSAPI_KEY', '')

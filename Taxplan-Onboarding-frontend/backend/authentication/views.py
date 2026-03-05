@@ -1,4 +1,9 @@
 import uuid
+import re
+import json
+from datetime import datetime
+from difflib import SequenceMatcher
+from types import SimpleNamespace
 from django.conf import settings
 from rest_framework import status, viewsets
 from rest_framework.decorators import api_view, permission_classes, authentication_classes
@@ -15,6 +20,80 @@ from utils.supabase_client import get_supabase_client
 from consultant_documents.models import ConsultantDocument as RealConsultantDocument
 
 User = get_user_model()
+
+NAME_MATCH_THRESHOLD = 90
+
+
+def _normalize_name(value):
+    text = str(value or '').strip().lower()
+    text = re.sub(r'[^a-z\s]', ' ', text)
+    return re.sub(r'\s+', ' ', text).strip()
+
+
+def _fuzzy_name_similarity_pct(left, right):
+    left_norm = _normalize_name(left)
+    right_norm = _normalize_name(right)
+    if not left_norm or not right_norm:
+        return 0
+    return int(round(SequenceMatcher(None, left_norm, right_norm).ratio() * 100))
+
+
+def _first_last_name(value):
+    tokens = _normalize_name(value).split()
+    if not tokens:
+        return ''
+    if len(tokens) == 1:
+        return tokens[0]
+    return f"{tokens[0]} {tokens[-1]}"
+
+
+def _fuzzy_first_last_similarity_pct(left, right):
+    left_norm = _first_last_name(left)
+    right_norm = _first_last_name(right)
+    if not left_norm or not right_norm:
+        return 0
+    return int(round(SequenceMatcher(None, left_norm, right_norm).ratio() * 100))
+
+
+def _parse_date_text(value):
+    raw = str(value or '').strip()
+    if not raw:
+        return None
+
+    formats = (
+        '%d/%m/%Y', '%d-%m-%Y', '%d.%m.%Y',
+        '%Y-%m-%d', '%Y/%m/%d',
+        '%d/%m/%y', '%d-%m-%y',
+    )
+    for fmt in formats:
+        try:
+            return datetime.strptime(raw, fmt).date()
+        except ValueError:
+            continue
+
+    dmy_match = re.search(r'(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})', raw)
+    if dmy_match:
+        day = int(dmy_match.group(1))
+        month = int(dmy_match.group(2))
+        year = int(dmy_match.group(3))
+        if year < 100:
+            year += 2000 if year < 50 else 1900
+        try:
+            return datetime(year, month, day).date()
+        except ValueError:
+            return None
+
+    ymd_match = re.search(r'(\d{4})[\/\-.](\d{1,2})[\/\-.](\d{1,2})', raw)
+    if ymd_match:
+        year = int(ymd_match.group(1))
+        month = int(ymd_match.group(2))
+        day = int(ymd_match.group(3))
+        try:
+            return datetime(year, month, day).date()
+        except ValueError:
+            return None
+
+    return None
 
 
 @api_view(['POST'])
@@ -88,7 +167,7 @@ def google_auth(request):
             max_age=3 * 60 * 60,  
             httponly=True,
             samesite='Lax',
-            secure=False,  # Set to True in production with HTTPS
+            secure=not settings.DEBUG,
         )
         
         return response
@@ -202,7 +281,51 @@ def upload_document(request):
 
     serializer = ConsultantDocumentSerializer(data=request.data)
     if serializer.is_valid():
-        serializer.save(user=user)
+        document = serializer.save(user=user)
+
+        normalized_doc_type = str(document_type or '').strip().lower()
+        if normalized_doc_type == 'experience_letter':
+            # Experience letter policy: only first+last name match check.
+            from ai_analysis.services import QualificationDocumentVerifier
+            verifier = QualificationDocumentVerifier()
+            verification_target = SimpleNamespace(
+                id=document.id,
+                file_path=document.file.name,
+                document_type='experience_letter',
+                qualification_type='Experience',
+            )
+            result = verifier.verify_document(verification_target)
+            extracted_name = str(result.get('extracted_name') or '').strip()
+            profile_first_last = _first_last_name(f"{user.first_name} {user.last_name}")
+            name_similarity_pct = _fuzzy_first_last_similarity_pct(profile_first_last, extracted_name)
+            name_match = name_similarity_pct >= NAME_MATCH_THRESHOLD
+            verification_status = str(result.get('verification_status', '')).strip().lower()
+            is_legit = verification_status == 'verified'
+
+            # Non-blocking: persist verification outcome for admin review only.
+            document.verification_status = 'Verified' if (is_legit and name_match) else 'Review Required'
+            document.gemini_raw_response = json.dumps({
+                'determined_type': result.get('determined_type'),
+                'verification_status': result.get('verification_status'),
+                'degree_level': result.get('degree_level'),
+                'extracted_name': extracted_name,
+                'name_similarity_pct': name_similarity_pct,
+                'name_threshold_pct': NAME_MATCH_THRESHOLD,
+                'name_match': name_match,
+                'is_legit': is_legit,
+                'notes': result.get('notes'),
+            })
+            document.save(update_fields=['verification_status', 'gemini_raw_response'])
+
+            response_data = ConsultantDocumentSerializer(document).data
+            response_data['verification'] = {
+                'is_legit': is_legit,
+                'name_similarity_pct': name_similarity_pct,
+                'name_threshold_pct': NAME_MATCH_THRESHOLD,
+                'name_match': name_match,
+            }
+            return Response(response_data, status=status.HTTP_201_CREATED)
+
         return Response(serializer.data, status=status.HTTP_201_CREATED)
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -254,12 +377,89 @@ def upload_identity_document(request):
         identity_doc.gemini_raw_response = result.get('raw_response')
         identity_doc.save()
 
+        is_masked = bool(result.get('is_sensitive_data_masked', False))
+        verification_status = str(identity_doc.verification_status or '').strip().lower()
+        extracted_name = str(result.get('extracted_name') or '').strip()
+        extracted_dob = str(result.get('extracted_dob') or '').strip()
+        profile_name = user.get_full_name()
+        profile_dob = getattr(user, 'dob', None)
+        name_similarity_pct = _fuzzy_name_similarity_pct(profile_name, extracted_name) if extracted_name else 0
+        name_match = (name_similarity_pct >= NAME_MATCH_THRESHOLD) if extracted_name else None
+        parsed_extracted_dob = _parse_date_text(extracted_dob)
+        dob_match = (bool(profile_dob and parsed_extracted_dob and profile_dob == parsed_extracted_dob)
+                     if parsed_extracted_dob else None)
+
+        # If we can detect personal-details mismatch, surface it first so UI can force details correction.
+        has_detectable_mismatch = (name_match is False) or (dob_match is False)
+        if has_detectable_mismatch:
+            from django.core.files.storage import default_storage
+            try:
+                default_storage.delete(saved_path)
+            except Exception:
+                pass
+            identity_doc.delete()
+            return Response({
+                "error": "Personal details do not match the uploaded Government ID.",
+                "code": "PERSONAL_DETAILS_MISMATCH",
+                "verification": {
+                    "document_type": result.get('document_type'),
+                    "status": result.get('verification_status'),
+                    "name_similarity_pct": name_similarity_pct,
+                    "name_threshold_pct": NAME_MATCH_THRESHOLD,
+                    "name_match": name_match,
+                    "dob_match": dob_match,
+                }
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        if verification_status != 'verified':
+            from django.core.files.storage import default_storage
+            try:
+                default_storage.delete(saved_path)
+            except Exception:
+                pass
+            identity_doc.delete()
+            return Response({
+                "error": "Document verification failed. Please upload a valid government ID.",
+                "code": "IDENTITY_INVALID",
+                "verification": {
+                    "document_type": result.get('document_type'),
+                    "status": result.get('verification_status'),
+                    "privacy_notes": result.get('privacy_notes', ''),
+                }
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        # For verified docs, require both checks to be present and true.
+        if name_match is not True or dob_match is not True:
+            from django.core.files.storage import default_storage
+            try:
+                default_storage.delete(saved_path)
+            except Exception:
+                pass
+            identity_doc.delete()
+            return Response({
+                "error": "Personal details do not match the uploaded Government ID.",
+                "code": "PERSONAL_DETAILS_MISMATCH",
+                "verification": {
+                    "document_type": result.get('document_type'),
+                    "status": result.get('verification_status'),
+                    "name_similarity_pct": name_similarity_pct,
+                    "name_threshold_pct": NAME_MATCH_THRESHOLD,
+                    "name_match": name_match,
+                    "dob_match": dob_match,
+                }
+            }, status=status.HTTP_400_BAD_REQUEST)
+
         return Response({
             "message": "Identity document uploaded and verified successfully", 
             "path": saved_path,
             "verification": {
                 "document_type": identity_doc.document_type,
-                "status": identity_doc.verification_status
+                "status": identity_doc.verification_status,
+                "is_masked": is_masked,
+                "name_similarity_pct": name_similarity_pct,
+                "name_threshold_pct": NAME_MATCH_THRESHOLD,
+                "name_match": name_match,
+                "dob_match": dob_match,
             }
         }, status=status.HTTP_200_OK)
 

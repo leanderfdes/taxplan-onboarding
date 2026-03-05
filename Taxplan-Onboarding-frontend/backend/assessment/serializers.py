@@ -16,8 +16,8 @@ class VideoQuestionSerializer(serializers.ModelSerializer):
 class UserSessionSerializer(serializers.ModelSerializer):
     class Meta:
         model = UserSession
-        fields = ['id', 'user', 'test_type', 'selected_domains', 'question_set', 'video_question_set', 'start_time', 'end_time', 'status', 'violation_count']
-        read_only_fields = ['user', 'selected_domains', 'question_set', 'video_question_set', 'start_time', 'end_time', 'status', 'violation_count']
+        fields = ['id', 'user', 'test_type', 'selected_domains', 'question_set', 'video_question_set', 'start_time', 'end_time', 'status', 'violation_count', 'violation_counters']
+        read_only_fields = ['user', 'selected_domains', 'question_set', 'video_question_set', 'start_time', 'end_time', 'status', 'violation_count', 'violation_counters']
 
 class ViolationSerializer(serializers.ModelSerializer):
     class Meta:
@@ -34,5 +34,12 @@ class ProctoringSnapshotSerializer(serializers.ModelSerializer):
     class Meta:
         from .models import ProctoringSnapshot
         model = ProctoringSnapshot
-        fields = ['id', 'session', 'image_url', 'timestamp', 'is_violation', 'violation_reason', 'face_count', 'match_score']
+        fields = [
+            'id', 'session', 'snapshot_id', 'image_url', 'timestamp', 'is_violation', 'violation_reason',
+            'face_count', 'match_score',
+            'pose_yaw', 'pose_pitch', 'pose_roll',
+            'mouth_state', 'audio_detected', 'gaze_violation',
+            'label_detection_results',
+            'rule_outcomes',
+        ]
         read_only_fields = ['session', 'timestamp']
